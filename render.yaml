@@ -1,0 +1,11 @@
+# render.yaml
+services:
+  - type: web
+    name: cc-checker-api
+    env: python
+    buildCommand: |
+      pip install -r requirements.txt
+    startCommand: python api.py
+    envVars:
+      - key: PORT
+        value: 5000
