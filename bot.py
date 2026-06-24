@@ -11,13 +11,11 @@ import asyncio
 import sqlite3
 import logging
 import re
-import base64
-import uuid
 import subprocess
-import importlib
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
-from urllib.parse import urlparse
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 # ============= OTOMATİK PAKET KURULUMU =============
 def install_packages():
@@ -32,7 +30,6 @@ def install_packages():
         "charset-normalizer",
         "idna",
         "cloudscraper",
-        "curl_cffi",
         "colorama"
     ]
     
@@ -49,24 +46,19 @@ install_packages()
 
 # ============= ANA KOD =============
 import requests
-import aiohttp
 import urllib3
 from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 import cloudscraper
-import curl_cffi.requests as curl_requests
 from colorama import init, Fore
 
 init(autoreset=True)
-
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 # ============= KONFIGÜRASYON =============
 BOT_TOKEN = "8827662254:AAEAnhpLxgzgZ1gJWRYFmBtkt_OwYCrkpUc"
 ADMIN_IDS = [8610336203, 8928323846]
 OWNER_ID = 8610336203
-CHANNEL_USERNAME = "@yartyccfurry"
+CHANNEL_USERNAME = "@yartyccfurry"  # <--- SENİN KANALIN
 DAILY_LIMIT = 5
 PREMIUM_LIMIT = 100
 MAX_CLONE_BOTS = 2
@@ -261,7 +253,6 @@ class APIClient:
     def __init__(self):
         self.session = requests.Session()
         self.scraper = cloudscraper.create_scraper()
-        self.curl_session = curl_requests.Session()
         self.setup_session()
         self.proxies = self.load_proxies()
         self.proxy_index = 0
@@ -297,7 +288,6 @@ class APIClient:
         }
         self.session.headers.update(headers)
         self.scraper.headers.update(headers)
-        self.curl_session.headers.update(headers)
     
     def get_proxy(self):
         if self.proxies:
@@ -318,16 +308,6 @@ class APIClient:
                         response = self.scraper.get(url, proxies=proxy, timeout=30)
                     else:
                         response = self.scraper.post(url, json=data, proxies=proxy, timeout=30)
-                    if response.status_code == 200:
-                        return response.json()
-                except:
-                    pass
-                
-                try:
-                    if method == "GET":
-                        response = self.curl_session.get(url, proxies=proxy, timeout=30, impersonate="chrome120")
-                    else:
-                        response = self.curl_session.post(url, json=data, proxies=proxy, timeout=30, impersonate="chrome120")
                     if response.status_code == 200:
                         return response.json()
                 except:
@@ -425,6 +405,9 @@ class SuperCardBot:
     
     # ============= KOMUTLAR =============
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update or not update.effective_user:
+            return
+        
         user = update.effective_user
         user_id = user.id
         self.db.add_user(user_id, user.username, user.first_name, user.last_name)
@@ -492,19 +475,23 @@ Merhaba {user.first_name}!
         await update.message.reply_text(welcome_text, reply_markup=InlineKeyboardMarkup(keyboard))
     
     async def generate_cards(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
+        message_obj = update.message
         
         if await self.is_banned(user_id):
-            await update.message.reply_text("🚫 YASAKLANDIN!")
+            await message_obj.reply_text("🚫 YASAKLANDIN!")
             return
         
         if not await self.check_channel_member(user_id):
-            await update.message.reply_text(f"⚠️ Once {CHANNEL_USERNAME} kanalina katil!")
+            await message_obj.reply_text(f"⚠️ Once {CHANNEL_USERNAME} kanalina katil!")
             return
         
         remaining = self.db.get_remaining_checks(user_id)
         if remaining <= 0:
-            await update.message.reply_text("❌ Gunluk hakkin bitti! Yarin tekrar dene.")
+            await message_obj.reply_text("❌ Gunluk hakkin bitti! Yarin tekrar dene.")
             return
         
         try:
@@ -512,7 +499,7 @@ Merhaba {user.first_name}!
             if context.args and context.args[0].isdigit():
                 count = min(int(context.args[0]), remaining, 20)
             
-            status_msg = await update.message.reply_text("⏳ Kart uretiliyor...")
+            status_msg = await message_obj.reply_text("⏳ Kart uretiliyor...")
             
             cards = []
             for _ in range(count):
@@ -530,34 +517,38 @@ Merhaba {user.first_name}!
                 
                 await status_msg.edit_text(message)
         except Exception as e:
-            await update.message.reply_text(f"❌ Hata: {str(e)}")
+            await message_obj.reply_text(f"❌ Hata: {str(e)}")
     
     async def check_single_card(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
+        message_obj = update.message
         
         if await self.is_banned(user_id):
-            await update.message.reply_text("🚫 YASAKLANDIN!")
+            await message_obj.reply_text("🚫 YASAKLANDIN!")
             return
         
         if not await self.check_channel_member(user_id):
-            await update.message.reply_text(f"⚠️ Once {CHANNEL_USERNAME} kanalina katil!")
+            await message_obj.reply_text(f"⚠️ Once {CHANNEL_USERNAME} kanalina katil!")
             return
         
         remaining = self.db.get_remaining_checks(user_id)
         if remaining <= 0:
-            await update.message.reply_text("❌ Gunluk hakkin bitti! Yarin tekrar dene.")
+            await message_obj.reply_text("❌ Gunluk hakkin bitti! Yarin tekrar dene.")
             return
         
         try:
             if context.args:
                 card_data = context.args[0]
             else:
-                await update.message.reply_text("❌ Kart bilgilerini girin!\nFormat: /check 4111111111111111|12|2026|123")
+                await message_obj.reply_text("❌ Kart bilgilerini girin!\nFormat: /check 4111111111111111|12|2026|123")
                 return
             
             parts = card_data.split('|')
             if len(parts) != 4:
-                await update.message.reply_text("❌ Hatali format! Dogru: 4111111111111111|12|2026|123")
+                await message_obj.reply_text("❌ Hatali format! Dogru: 4111111111111111|12|2026|123")
                 return
             
             card = {
@@ -567,7 +558,7 @@ Merhaba {user.first_name}!
                 "cvv": parts[3].strip()
             }
             
-            status_msg = await update.message.reply_text("⏳ Kart kontrol ediliyor...")
+            status_msg = await message_obj.reply_text("⏳ Kart kontrol ediliyor...")
             
             result = await asyncio.to_thread(CCChecker.check_card_via_api, card)
             
@@ -582,7 +573,7 @@ Merhaba {user.first_name}!
                 
                 if card_status == 'approved':
                     status_text = "✅ CANLI"
-                    await update.message.reply_text("🎉 TEBRIKLER! KART CANLI!")
+                    await message_obj.reply_text("🎉 TEBRIKLER! KART CANLI!")
                 elif card_status == 'declined':
                     status_text = "❌ OLU"
                 else:
@@ -604,25 +595,29 @@ Merhaba {user.first_name}!
                 await status_msg.edit_text("❌ Hata olustu! API'ye baglanilamiyor.")
                 
         except Exception as e:
-            await update.message.reply_text(f"❌ Hata: {str(e)}")
+            await message_obj.reply_text(f"❌ Hata: {str(e)}")
     
     async def check_multiple_cards(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
+        message_obj = update.message
         
         if await self.is_banned(user_id):
-            await update.message.reply_text("🚫 YASAKLANDIN!")
+            await message_obj.reply_text("🚫 YASAKLANDIN!")
             return
         
         if not await self.check_channel_member(user_id):
-            await update.message.reply_text(f"⚠️ Once {CHANNEL_USERNAME} kanalina katil!")
+            await message_obj.reply_text(f"⚠️ Once {CHANNEL_USERNAME} kanalina katil!")
             return
         
         remaining = self.db.get_remaining_checks(user_id)
         if remaining <= 0:
-            await update.message.reply_text("❌ Gunluk hakkin bitti! Yarin tekrar dene.")
+            await message_obj.reply_text("❌ Gunluk hakkin bitti! Yarin tekrar dene.")
             return
         
-        await update.message.reply_text(
+        await message_obj.reply_text(
             "📋 Kartlari gonderin!\n\n"
             "Her karti alt alta yazin:\n"
             "4111111111111111|12|2026|123\n\n"
@@ -631,31 +626,35 @@ Merhaba {user.first_name}!
         context.user_data['multi_check'] = True
     
     async def clone_bot(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
+        message_obj = update.message
         
         if await self.is_banned(user_id):
-            await update.message.reply_text("🚫 YASAKLANDIN!")
+            await message_obj.reply_text("🚫 YASAKLANDIN!")
             return
         
         if not await self.check_channel_member(user_id):
-            await update.message.reply_text(f"⚠️ Once {CHANNEL_USERNAME} kanalina katil!")
+            await message_obj.reply_text(f"⚠️ Once {CHANNEL_USERNAME} kanalina katil!")
             return
         
         user = self.db.get_user(user_id)
         is_premium = user[5] == 1 if user else False
         
         if not is_premium and user_id not in ADMIN_IDS:
-            await update.message.reply_text("❌ Clone bot sadece PREMIUM kullanicilara ozeldir!")
+            await message_obj.reply_text("❌ Clone bot sadece PREMIUM kullanicilara ozeldir!")
             return
         
         clone_bots = self.db.get_clone_bots(user_id)
         active_clones = [b for b in clone_bots if b[4] == 1]
         
         if len(active_clones) >= MAX_CLONE_BOTS:
-            await update.message.reply_text(f"❌ Maximum {MAX_CLONE_BOTS} clone bot olusturabilirsin!")
+            await message_obj.reply_text(f"❌ Maximum {MAX_CLONE_BOTS} clone bot olusturabilirsin!")
             return
         
-        await update.message.reply_text(
+        await message_obj.reply_text(
             "🤖 Clone Bot Olustur\n\n"
             "BotFather'dan aldigin TOKEN'i gonder:\n"
             "YOUR_BOT_TOKEN\n\n"
@@ -664,25 +663,29 @@ Merhaba {user.first_name}!
         context.user_data['waiting_clone_token'] = True
     
     async def handle_clone_token(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
-        token = update.message.text.strip()
+        message_obj = update.message
+        token = message_obj.text.strip()
         
         if token.startswith('/'):
             return
         
         if ':' not in token:
-            await update.message.reply_text("❌ Gecersiz token! BotFather'dan aldigin token'i gonder.")
+            await message_obj.reply_text("❌ Gecersiz token! BotFather'dan aldigin token'i gonder.")
             return
         
         try:
             bot_info = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=10)
             if bot_info.status_code != 200:
-                await update.message.reply_text("❌ Gecersiz token! Bot calismiyor.")
+                await message_obj.reply_text("❌ Gecersiz token! Bot calismiyor.")
                 return
             
             bot_data = bot_info.json()
             if not bot_data.get('ok'):
-                await update.message.reply_text("❌ Gecersiz token!")
+                await message_obj.reply_text("❌ Gecersiz token!")
                 return
             
             bot_username = bot_data['result'].get('username', 'Unknown')
@@ -690,26 +693,30 @@ Merhaba {user.first_name}!
             success, msg = self.db.add_clone_bot(token, bot_username, user_id)
             
             if success:
-                await update.message.reply_text(
+                await message_obj.reply_text(
                     f"✅ Clone Bot Olusturuldu!\n\n"
                     f"🤖 Bot: @{bot_username}\n"
                     f"👤 Sahip: {user_id}\n"
                     f"📅 Tarih: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
                 )
             else:
-                await update.message.reply_text(f"❌ {msg}")
+                await message_obj.reply_text(f"❌ {msg}")
                 
         except Exception as e:
-            await update.message.reply_text(f"❌ Hata: {str(e)}")
+            await message_obj.reply_text(f"❌ Hata: {str(e)}")
         
         context.user_data['waiting_clone_token'] = False
     
     async def my_clones(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
+        message_obj = update.message
         
         clone_bots = self.db.get_clone_bots(user_id)
         if not clone_bots:
-            await update.message.reply_text("❌ Henuz clone botun yok!\n/clone ile olustur.")
+            await message_obj.reply_text("❌ Henuz clone botun yok!\n/clone ile olustur.")
             return
         
         message = "🤖 Klon Botlarin:\n\n"
@@ -721,14 +728,18 @@ Merhaba {user.first_name}!
             message += f"  ID: {bot[0]}\n\n"
         
         keyboard = [[InlineKeyboardButton("🗑️ Klon Bot Sil", callback_data="remove_clone")]]
-        await update.message.reply_text(message, reply_markup=InlineKeyboardMarkup(keyboard))
+        await message_obj.reply_text(message, reply_markup=InlineKeyboardMarkup(keyboard))
     
     async def remove_clone(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
+        message_obj = update.message
         
         clone_bots = self.db.get_clone_bots(user_id)
         if not clone_bots:
-            await update.message.reply_text("❌ Silinecek clone bot yok!")
+            await message_obj.reply_text("❌ Silinecek clone bot yok!")
             return
         
         keyboard = []
@@ -737,12 +748,16 @@ Merhaba {user.first_name}!
                 keyboard.append([InlineKeyboardButton(f"🗑️ @{bot[2]}", callback_data=f"delclone_{bot[0]}")])
         keyboard.append([InlineKeyboardButton("❌ Iptal", callback_data="cancel")])
         
-        await update.message.reply_text(
+        await message_obj.reply_text(
             "🗑️ Silmek istedigin botu sec:",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
     async def api_info(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update or not update.effective_user:
+            return
+        
+        message_obj = update.message
         api_status = "✅ Calisiyor" if self.api.test_api() else "❌ Calismiyor"
         
         message = f"""
@@ -774,13 +789,17 @@ POST {API_ENDPOINTS['check_single']}
 • Hizli kontrol
         """
         
-        await update.message.reply_text(message)
+        await message_obj.reply_text(message)
     
     async def stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
+        message_obj = update.message
         
         if await self.is_banned(user_id):
-            await update.message.reply_text("🚫 YASAKLANDIN!")
+            await message_obj.reply_text("🚫 YASAKLANDIN!")
             return
         
         user = self.db.get_user(user_id)
@@ -788,7 +807,7 @@ POST {API_ENDPOINTS['check_single']}
         remaining = self.db.get_remaining_checks(user_id)
         
         if not user:
-            await update.message.reply_text("❌ Kullanici bulunamadi!")
+            await message_obj.reply_text("❌ Kullanici bulunamadi!")
             return
         
         is_premium = user[5] == 1
@@ -811,9 +830,14 @@ POST {API_ENDPOINTS['check_single']}
 ⭐ Premium: {'✅ Aktif' if is_premium else '❌ Pasif'}
         """
         
-        await update.message.reply_text(message)
+        await message_obj.reply_text(message)
     
     async def help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update or not update.effective_user:
+            return
+        
+        message_obj = update.message
+        
         help_text = """
 📖 KULLANIM KILAVUZU
 
@@ -855,9 +879,14 @@ POST {API_ENDPOINTS['check_single']}
             [InlineKeyboardButton("🤖 Clone Bot", callback_data="clone"), InlineKeyboardButton("📡 API", callback_data="api")]
         ]
         
-        await update.message.reply_text(help_text, reply_markup=InlineKeyboardMarkup(keyboard))
+        await message_obj.reply_text(help_text, reply_markup=InlineKeyboardMarkup(keyboard))
     
     async def premium(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update or not update.effective_user:
+            return
+        
+        message_obj = update.message
+        
         message = """
 ⭐ PREMIUM PAKETLER
 
@@ -878,10 +907,14 @@ POST {API_ENDPOINTS['check_single']}
 
 📞 Iletisim: @rinexdestek
         """
-        await update.message.reply_text(message)
+        await message_obj.reply_text(message)
     
     async def refer(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
+        message_obj = update.message
         user = self.db.get_user(user_id)
         
         if not user:
@@ -907,14 +940,18 @@ Her referans icin 1 ekstra hak kazan!
         """
         
         keyboard = [[InlineKeyboardButton("📤 Paylas", switch_inline_query=ref_link)]]
-        await update.message.reply_text(message, reply_markup=InlineKeyboardMarkup(keyboard))
+        await message_obj.reply_text(message, reply_markup=InlineKeyboardMarkup(keyboard))
     
     # ============= ADMIN KOMUTLARI =============
     async def admin_panel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
+        message_obj = update.message
         
         if not await self.is_admin(user_id):
-            await update.message.reply_text("❌ Bu komut sadece adminler icindir!")
+            await message_obj.reply_text("❌ Bu komut sadece adminler icindir!")
             return
         
         users = self.db.get_all_users()
@@ -946,16 +983,20 @@ Her referans icin 1 ekstra hak kazan!
 /unban - Ban kaldir
         """
         
-        await update.message.reply_text(message)
+        await message_obj.reply_text(message)
     
     async def broadcast(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
+        message_obj = update.message
         
         if not await self.is_admin(user_id):
             return
         
         if not context.args:
-            await update.message.reply_text("❌ Mesaj gir!\nFormat: /broadcast Merhaba herkese!")
+            await message_obj.reply_text("❌ Mesaj gir!\nFormat: /broadcast Merhaba herkese!")
             return
         
         message = ' '.join(context.args)
@@ -963,7 +1004,7 @@ Her referans icin 1 ekstra hak kazan!
         sent = 0
         failed = 0
         
-        status_msg = await update.message.reply_text(f"⏳ {len(users)} kullaniciya mesaj gonderiliyor...")
+        status_msg = await message_obj.reply_text(f"⏳ {len(users)} kullaniciya mesaj gonderiliyor...")
         
         for user in users:
             try:
@@ -976,13 +1017,17 @@ Her referans icin 1 ekstra hak kazan!
         await status_msg.edit_text(f"✅ Duyuru gonderildi!\n\n📤 Gonderilen: {sent}\n❌ Basarisiz: {failed}")
     
     async def add_premium(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
+        message_obj = update.message
         
         if not await self.is_admin(user_id):
             return
         
         if len(context.args) < 2:
-            await update.message.reply_text("❌ Kullanici ID ve sure girin!\nFormat: /add_premium 123456 30")
+            await message_obj.reply_text("❌ Kullanici ID ve sure girin!\nFormat: /add_premium 123456 30")
             return
         
         try:
@@ -997,18 +1042,22 @@ Her referans icin 1 ekstra hak kazan!
             except:
                 pass
             
-            await update.message.reply_text(f"✅ Premium verildi! Kullanici: {target_id}")
+            await message_obj.reply_text(f"✅ Premium verildi! Kullanici: {target_id}")
         except:
-            await update.message.reply_text("❌ Hatali format!")
+            await message_obj.reply_text("❌ Hatali format!")
     
     async def remove_premium(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
+        message_obj = update.message
         
         if not await self.is_admin(user_id):
             return
         
         if not context.args:
-            await update.message.reply_text("❌ Kullanici ID girin!\nFormat: /remove_premium 123456")
+            await message_obj.reply_text("❌ Kullanici ID girin!\nFormat: /remove_premium 123456")
             return
         
         try:
@@ -1020,18 +1069,22 @@ Her referans icin 1 ekstra hak kazan!
             except:
                 pass
             
-            await update.message.reply_text(f"✅ Premium alindi: {target_id}")
+            await message_obj.reply_text(f"✅ Premium alindi: {target_id}")
         except:
-            await update.message.reply_text("❌ Hatali format!")
+            await message_obj.reply_text("❌ Hatali format!")
     
     async def ban_user(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
+        message_obj = update.message
         
         if not await self.is_admin(user_id):
             return
         
         if not context.args:
-            await update.message.reply_text("❌ Kullanici ID girin!\nFormat: /ban 123456")
+            await message_obj.reply_text("❌ Kullanici ID girin!\nFormat: /ban 123456")
             return
         
         try:
@@ -1043,18 +1096,22 @@ Her referans icin 1 ekstra hak kazan!
             except:
                 pass
             
-            await update.message.reply_text(f"✅ Kullanici yasaklandi: {target_id}")
+            await message_obj.reply_text(f"✅ Kullanici yasaklandi: {target_id}")
         except:
-            await update.message.reply_text("❌ Hatali format!")
+            await message_obj.reply_text("❌ Hatali format!")
     
     async def unban_user(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
+        message_obj = update.message
         
         if not await self.is_admin(user_id):
             return
         
         if not context.args:
-            await update.message.reply_text("❌ Kullanici ID girin!\nFormat: /unban 123456")
+            await message_obj.reply_text("❌ Kullanici ID girin!\nFormat: /unban 123456")
             return
         
         try:
@@ -1066,12 +1123,15 @@ Her referans icin 1 ekstra hak kazan!
             except:
                 pass
             
-            await update.message.reply_text(f"✅ Yasa kaldirildi: {target_id}")
+            await message_obj.reply_text(f"✅ Yasa kaldirildi: {target_id}")
         except:
-            await update.message.reply_text("❌ Hatali format!")
+            await message_obj.reply_text("❌ Hatali format!")
     
     # ============= HANDLER'LAR =============
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update or not update.callback_query:
+            return
+        
         query = update.callback_query
         user_id = query.from_user.id
         await query.answer()
@@ -1082,46 +1142,68 @@ Her referans icin 1 ekstra hak kazan!
             await query.edit_message_text("🚫 YASAKLANDIN!")
             return
         
+        # Callback'ten gelenleri işle - mesaj objesini context'e kaydet
         if data == "generate":
+            # Yeni bir message oluştur
+            await query.edit_message_text("⏳ Kart üretiliyor...")
+            # generate_cards'a message gönder
+            context.user_data['callback_message'] = query.message
             await self.generate_cards(update, context)
+            
         elif data == "check_single":
             await query.edit_message_text("✅ Format: /check 4111111111111111|12|2026|123")
+            
         elif data == "check_multiple":
             await query.edit_message_text("📋 /check_multiple yazip kartlari gonder.")
+            
         elif data == "stats":
             await self.stats(update, context)
+            
         elif data == "premium":
             await self.premium(update, context)
+            
         elif data == "refer":
             await self.refer(update, context)
+            
         elif data == "help":
             await self.help(update, context)
+            
         elif data == "refresh":
             await query.edit_message_text("🔄 Guncelleniyor...")
             await self.start(update, context)
+            
         elif data == "admin_panel":
             await self.admin_panel(update, context)
+            
         elif data == "clone":
             await self.clone_bot(update, context)
+            
         elif data == "api":
             await self.api_info(update, context)
+            
         elif data == "remove_clone":
             await self.remove_clone(update, context)
+            
         elif data.startswith("delclone_"):
             bot_id = int(data.split("_")[1])
             if self.db.remove_clone_bot(bot_id, user_id):
                 await query.edit_message_text("✅ Clone bot silindi!")
             else:
                 await query.edit_message_text("❌ Silme basarisiz!")
+                
         elif data == "cancel":
             await query.edit_message_text("✅ Islem iptal edildi!")
     
     async def handle_messages(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
-        text = update.message.text
+        message_obj = update.message
+        text = message_obj.text
         
         if await self.is_banned(user_id):
-            await update.message.reply_text("🚫 YASAKLANDIN!")
+            await message_obj.reply_text("🚫 YASAKLANDIN!")
             return
         
         if context.user_data.get('waiting_clone_token'):
@@ -1131,7 +1213,7 @@ Her referans icin 1 ekstra hak kazan!
         if context.user_data.get('multi_check'):
             if text.lower() == '/cancel':
                 context.user_data['multi_check'] = False
-                await update.message.reply_text("✅ Islem iptal edildi!")
+                await message_obj.reply_text("✅ Islem iptal edildi!")
                 return
             
             cards = []
@@ -1149,10 +1231,10 @@ Her referans icin 1 ekstra hak kazan!
                                  "year": parts[2].strip(), "cvv": parts[3].strip()})
             
             if not cards:
-                await update.message.reply_text("❌ Gecerli kart bulunamadi!")
+                await message_obj.reply_text("❌ Gecerli kart bulunamadi!")
                 return
             
-            status_msg = await update.message.reply_text(f"⏳ {len(cards)} kart kontrol ediliyor...")
+            status_msg = await message_obj.reply_text(f"⏳ {len(cards)} kart kontrol ediliyor...")
             
             results = []
             for card in cards:
@@ -1183,16 +1265,23 @@ Her referans icin 1 ekstra hak kazan!
             context.user_data['multi_check'] = False
     
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update or not update.effective_user:
+            return
+        
         user_id = update.effective_user.id
+        message_obj = update.message
+        
         if user_id in context.user_data:
             context.user_data.clear()
-            await update.message.reply_text("✅ Islem iptal edildi!")
+            await message_obj.reply_text("✅ Islem iptal edildi!")
         else:
-            await update.message.reply_text("❌ Aktif islem bulunamadi!")
+            await message_obj.reply_text("❌ Aktif islem bulunamadi!")
     
     # ============= BOTU BAŞLAT =============
     def run(self):
         try:
+            # Webhook'u temizle
+            import asyncio
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             
@@ -1201,6 +1290,7 @@ Her referans icin 1 ekstra hak kazan!
             
             self.app = Application.builder().token(BOT_TOKEN).build()
             
+            # Handler'lar
             self.app.add_handler(CommandHandler("start", self.start))
             self.app.add_handler(CommandHandler("help", self.help))
             self.app.add_handler(CommandHandler("generate", self.generate_cards))
@@ -1232,6 +1322,7 @@ Her referans icin 1 ekstra hak kazan!
             print(f"📡 API Durumu: {'✅ Calisiyor' if self.api.test_api() else '❌ Calismiyor'}")
             print("✅ Bot calisiyor!")
             
+            # Polling ile başlat - conflict hatasını önlemek için
             loop.run_until_complete(self.app.initialize())
             loop.run_until_complete(self.app.start())
             loop.run_until_complete(self.app.updater.start_polling(
