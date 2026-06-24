@@ -8,28 +8,40 @@ import time
 import random
 import string
 import asyncio
-import sqlite3
 import logging
 import re
 import subprocess
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from flask import Flask, request, jsonify, render_template_string
+from flask_cors import CORS
+import requests
+import urllib3
+from urllib3.util.retry import Retry
+from requests.adapters import HTTPAdapter
+import cloudscraper
+import curl_cffi.requests as curl_requests
+from colorama import init, Fore
+import ssl
+import socket
+import socks
+import base64
+import hashlib
+import hmac
+
+init(autoreset=True)
 
 # ============= OTOMATİK PAKET KURULUMU =============
 def install_packages():
     packages = [
-        "python-telegram-bot",
+        "flask",
+        "flask-cors",
         "requests",
-        "aiohttp",
+        "cloudscraper",
+        "curl_cffi",
+        "brotli",
+        "zstandard",
         "pysocks",
         "urllib3",
-        "httpx",
-        "certifi",
-        "charset-normalizer",
-        "idna",
-        "cloudscraper",
         "colorama"
     ]
     
@@ -45,303 +57,198 @@ def install_packages():
 install_packages()
 
 # ============= ANA KOD =============
-import requests
-import urllib3
-from urllib3.util.retry import Retry
-from requests.adapters import HTTPAdapter
-import cloudscraper
-from colorama import init, Fore
-
-init(autoreset=True)
+app = Flask(__name__)
+CORS(app)
 
 # ============= KONFIGÜRASYON =============
-BOT_TOKEN = "8827662254:AAEAnhpLxgzgZ1gJWRYFmBtkt_OwYCrkpUc"
-ADMIN_IDS = [8610336203, 8928323846]
-OWNER_ID = 8610336203
-CHANNEL_USERNAME = "@yartyccfurry"  # <--- SENİN KANALIN
-DAILY_LIMIT = 5
-PREMIUM_LIMIT = 100
-MAX_CLONE_BOTS = 2
-DB_NAME = "bot_data.db"
-MAIN_API_URL = "https://yartyccfurry.onrender.com"
+API_VERSION = "2.0.0"
+API_NAME = "Super CC Checker API"
+API_URL = "https://yartyccfurry.onrender.com"
 
-API_ENDPOINTS = {
-    "generate": f"{MAIN_API_URL}/api/generate",
-    "check_single": f"{MAIN_API_URL}/api/check-single",
-    "check_multiple": f"{MAIN_API_URL}/api/check",
-    "stats": f"{MAIN_API_URL}/api/stats"
+# ============= SÜPER GÜÇLÜ USER-AGENT'LER =============
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36 Edg/149.0.0.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36 OPR/149.0.0.0",
+]
+
+# ============= GOOGLEBOT USER-AGENT =============
+GOOGLEBOT_AGENTS = [
+    "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+    "Mozilla/5.0 (compatible; Googlebot/2.1; +https://www.google.com/bot.html)",
+    "Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Mobile Safari/537.36 (compatible; Googlebot/2.1; +https://www.google.com/bot.html)",
+]
+
+# ============= SÜPER HEADERS =============
+SUPER_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br, zstd",
+    "Accept-Language": "en-US,en;q=0.9,tr;q=0.8,de;q=0.7",
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "DNT": "1",
+    "Pragma": "no-cache",
+    "Sec-Ch-Ua": '"Google Chrome";v="149", "Chromium";v="149", "Not_A Brand";v="24"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
 }
 
-# Logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
-)
-logger = logging.getLogger(__name__)
-
-# ============= VERİTABANI =============
-class Database:
+# ============= PROXY YÖNETİCİ =============
+class ProxyManager:
     def __init__(self):
-        self.conn = sqlite3.connect(DB_NAME, check_same_thread=False)
-        self.cursor = self.conn.cursor()
-        self.create_tables()
-    
-    def create_tables(self):
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                username TEXT,
-                first_name TEXT,
-                last_name TEXT,
-                join_date TEXT,
-                is_premium INTEGER DEFAULT 0,
-                premium_expiry TEXT,
-                is_banned INTEGER DEFAULT 0,
-                is_admin INTEGER DEFAULT 0,
-                total_checks INTEGER DEFAULT 0,
-                daily_checks INTEGER DEFAULT 0,
-                refer_count INTEGER DEFAULT 0
-            )
-        ''')
-        
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS daily_usage (
-                user_id INTEGER,
-                date TEXT,
-                checks INTEGER DEFAULT 0,
-                PRIMARY KEY (user_id, date)
-            )
-        ''')
-        
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS card_results (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                card_number TEXT,
-                card_month TEXT,
-                card_year TEXT,
-                card_cvv TEXT,
-                status TEXT,
-                gateway TEXT,
-                message TEXT,
-                check_date TEXT
-            )
-        ''')
-        
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS clone_bots (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                bot_token TEXT UNIQUE,
-                bot_username TEXT,
-                owner_id INTEGER,
-                clone_date TEXT,
-                is_active INTEGER DEFAULT 1,
-                total_checks INTEGER DEFAULT 0
-            )
-        ''')
-        
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS proxies (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                proxy TEXT,
-                type TEXT,
-                is_active INTEGER DEFAULT 1,
-                last_used TEXT,
-                fail_count INTEGER DEFAULT 0
-            )
-        ''')
-        
-        self.conn.commit()
-    
-    def add_user(self, user_id, username, first_name, last_name):
-        self.cursor.execute('''
-            INSERT OR IGNORE INTO users 
-            (user_id, username, first_name, last_name, join_date, total_checks, daily_checks)
-            VALUES (?, ?, ?, ?, ?, 0, 0)
-        ''', (user_id, username or "", first_name or "", last_name or "", datetime.now().isoformat()))
-        self.conn.commit()
-    
-    def get_user(self, user_id):
-        self.cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
-        return self.cursor.fetchone()
-    
-    def update_user(self, user_id, **kwargs):
-        for key, value in kwargs.items():
-            self.cursor.execute(f'UPDATE users SET {key} = ? WHERE user_id = ?', (value, user_id))
-        self.conn.commit()
-    
-    def get_daily_checks(self, user_id):
-        today = datetime.now().date().isoformat()
-        self.cursor.execute('SELECT checks FROM daily_usage WHERE user_id = ? AND date = ?', (user_id, today))
-        result = self.cursor.fetchone()
-        return result[0] if result else 0
-    
-    def add_daily_check(self, user_id):
-        today = datetime.now().date().isoformat()
-        self.cursor.execute('''
-            INSERT INTO daily_usage (user_id, date, checks) 
-            VALUES (?, ?, 1)
-            ON CONFLICT(user_id, date) DO UPDATE SET checks = checks + 1
-        ''', (user_id, today))
-        self.conn.commit()
-    
-    def get_remaining_checks(self, user_id):
-        user = self.get_user(user_id)
-        if not user:
-            return 0
-        if user[7] == 1:
-            return 999999
-        if user[5] == 1:
-            expiry = user[6]
-            if expiry and datetime.now().isoformat() < expiry:
-                return PREMIUM_LIMIT - self.get_daily_checks(user_id)
-        return DAILY_LIMIT - self.get_daily_checks(user_id)
-    
-    def add_card_result(self, user_id, card, status, gateway, message):
-        self.cursor.execute('''
-            INSERT INTO card_results 
-            (user_id, card_number, card_month, card_year, card_cvv, status, gateway, message, check_date)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (user_id, card.get('number', ''), card.get('month', ''), card.get('year', ''), 
-              card.get('cvv', ''), status, gateway, message[:500], datetime.now().isoformat()))
-        self.conn.commit()
-        self.cursor.execute('UPDATE users SET total_checks = total_checks + 1 WHERE user_id = ?', (user_id,))
-        self.conn.commit()
-    
-    def get_user_stats(self, user_id):
-        self.cursor.execute('''
-            SELECT COUNT(*) as total,
-                   SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as live,
-                   SUM(CASE WHEN status = 'declined' THEN 1 ELSE 0 END) as dead
-            FROM card_results WHERE user_id = ?
-        ''', (user_id,))
-        return self.cursor.fetchone()
-    
-    def get_all_users(self):
-        self.cursor.execute('SELECT user_id, username, first_name, last_name, is_premium, is_banned FROM users')
-        return self.cursor.fetchall()
-    
-    def add_clone_bot(self, bot_token, bot_username, owner_id):
-        self.cursor.execute('SELECT COUNT(*) FROM clone_bots WHERE owner_id = ? AND is_active = 1', (owner_id,))
-        count = self.cursor.fetchone()[0]
-        if count >= MAX_CLONE_BOTS:
-            return False, f"Maximum {MAX_CLONE_BOTS} clone bot allowed!"
-        
-        self.cursor.execute('''
-            INSERT INTO clone_bots (bot_token, bot_username, owner_id, clone_date)
-            VALUES (?, ?, ?, ?)
-        ''', (bot_token, bot_username, owner_id, datetime.now().isoformat()))
-        self.conn.commit()
-        return True, "Clone bot added successfully!"
-    
-    def get_clone_bots(self, owner_id):
-        self.cursor.execute('SELECT id, bot_token, bot_username, clone_date, is_active, total_checks FROM clone_bots WHERE owner_id = ?', (owner_id,))
-        return self.cursor.fetchall()
-    
-    def remove_clone_bot(self, bot_id, owner_id):
-        self.cursor.execute('UPDATE clone_bots SET is_active = 0 WHERE id = ? AND owner_id = ?', (bot_id, owner_id))
-        self.conn.commit()
-        return self.cursor.rowcount > 0
-    
-    def get_all_clone_bots(self):
-        self.cursor.execute('SELECT id, bot_token, bot_username, owner_id, clone_date, is_active, total_checks FROM clone_bots WHERE is_active = 1')
-        return self.cursor.fetchall()
-
-# ============= API CLIENT =============
-class APIClient:
-    def __init__(self):
-        self.session = requests.Session()
-        self.scraper = cloudscraper.create_scraper()
-        self.setup_session()
         self.proxies = self.load_proxies()
-        self.proxy_index = 0
+        self.index = 0
     
     def load_proxies(self):
         proxies = []
-        proxy_list = [
+        http_proxies = [
             "http://189.240.60.164:9090", "http://190.189.114.74:999",
             "http://177.234.159.14:999", "http://200.7.86.202:999",
             "http://201.221.162.81:999", "http://187.216.52.76:999",
             "http://189.203.194.154:999", "http://170.239.218.40:999",
             "http://186.2.244.100:999", "http://181.143.224.130:999",
+            "http://186.238.133.194:999", "http://190.128.192.42:999",
+            "http://177.54.169.122:999", "http://187.190.198.172:999",
+            "http://200.35.160.226:999", "http://190.14.248.150:999",
+            "http://190.15.209.74:999", "http://181.53.15.230:999",
+            "http://191.102.148.110:999", "http://177.220.164.2:999",
         ]
-        for p in proxy_list:
-            proxies.append({"http": p, "https": p})
-        return proxies
-    
-    def setup_session(self):
-        retry_strategy = Retry(total=5, backoff_factor=2, status_forcelist=[429, 500, 502, 503, 504, 403, 401])
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        self.session.mount("http://", adapter)
-        self.session.mount("https://", adapter)
         
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "DNT": "1",
-            "Pragma": "no-cache"
-        }
-        self.session.headers.update(headers)
-        self.scraper.headers.update(headers)
+        socks_proxies = [
+            "socks5://190.189.114.74:1080",
+            "socks5://177.234.159.14:1080",
+            "socks5://200.7.86.202:1080",
+        ]
+        
+        for p in http_proxies:
+            proxies.append({"http": p, "https": p})
+        
+        for p in socks_proxies:
+            proxies.append({"http": p, "https": p})
+        
+        return proxies
     
     def get_proxy(self):
         if self.proxies:
-            proxy = self.proxies[self.proxy_index % len(self.proxies)]
-            self.proxy_index += 1
+            proxy = self.proxies[self.index % len(self.proxies)]
+            self.index += 1
             return proxy
         return None
+
+# ============= SÜPER GÜÇLÜ API CLIENT =============
+class SuperAPIClient:
+    def __init__(self):
+        self.proxy_manager = ProxyManager()
+        self.session = requests.Session()
+        self.scraper = cloudscraper.create_scraper()
+        self.curl_session = curl_requests.Session()
+        self.setup_session()
+        self.session_count = 0
     
-    def make_request(self, endpoint, data=None, method="GET"):
-        url = f"{MAIN_API_URL}{endpoint}"
+    def setup_session(self):
+        retry_strategy = Retry(
+            total=10,
+            backoff_factor=3,
+            status_forcelist=[429, 500, 502, 503, 504, 403, 401, 404, 408],
+            allowed_methods=["HEAD", "GET", "OPTIONS", "POST", "PUT", "DELETE"]
+        )
         
-        for attempt in range(5):
+        adapter = HTTPAdapter(
+            max_retries=retry_strategy,
+            pool_connections=200,
+            pool_maxsize=200
+        )
+        
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
+        
+        headers = SUPER_HEADERS.copy()
+        headers["User-Agent"] = random.choice(USER_AGENTS + GOOGLEBOT_AGENTS)
+        
+        self.session.headers.update(headers)
+        self.scraper.headers.update(headers)
+        self.curl_session.headers.update(headers)
+        
+        self.session.verify = False
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    
+    def get_random_user_agent(self):
+        return random.choice(USER_AGENTS + GOOGLEBOT_AGENTS)
+    
+    def make_request(self, endpoint, data=None, method="GET", use_googlebot=False):
+        url = f"{API_URL}{endpoint}"
+        self.session_count += 1
+        
+        if self.session_count % 10 == 0:
+            self.setup_session()
+        
+        for attempt in range(8):
             try:
-                proxy = self.get_proxy()
+                proxy = self.proxy_manager.get_proxy()
+                user_agent = random.choice(GOOGLEBOT_AGENTS) if use_googlebot else self.get_random_user_agent()
                 
-                try:
-                    if method == "GET":
-                        response = self.scraper.get(url, proxies=proxy, timeout=30)
-                    else:
-                        response = self.scraper.post(url, json=data, proxies=proxy, timeout=30)
-                    if response.status_code == 200:
-                        return response.json()
-                except:
-                    pass
+                current_headers = SUPER_HEADERS.copy()
+                current_headers["User-Agent"] = user_agent
                 
-                if method == "GET":
-                    response = self.session.get(url, proxies=proxy, timeout=30)
-                else:
-                    response = self.session.post(url, json=data, proxies=proxy, timeout=30)
+                methods = [
+                    ("cloudscraper", self.scraper),
+                    ("curl", self.curl_session),
+                    ("requests", self.session)
+                ]
                 
-                if response.status_code == 200:
-                    return response.json()
-                elif response.status_code == 429:
-                    time.sleep(5)
-                    continue
-                else:
-                    time.sleep(2)
-                    continue
-                    
-            except Exception as e:
-                logger.error(f"İstek hatası: {e}")
+                for method_name, session in methods:
+                    try:
+                        session.headers.update(current_headers)
+                        
+                        if method == "GET":
+                            response = session.get(url, proxies=proxy, timeout=60)
+                        else:
+                            response = session.post(url, json=data, proxies=proxy, timeout=60)
+                        
+                        if response.status_code == 200:
+                            return response.json()
+                        elif response.status_code == 429:
+                            time.sleep(10)
+                            continue
+                        elif response.status_code in [403, 401, 404]:
+                            proxy = self.proxy_manager.get_proxy()
+                            continue
+                        else:
+                            time.sleep(3)
+                            continue
+                            
+                    except Exception as e:
+                        logging.warning(f"{method_name} hatası: {e}")
+                        continue
+                
                 time.sleep(2)
+                
+            except Exception as e:
+                logging.error(f"İstek hatası (deneme {attempt+1}): {e}")
+                time.sleep(3)
                 continue
         
-        return None
-    
-    def test_api(self):
         try:
-            response = self.session.get(f"{MAIN_API_URL}/api/stats", timeout=10)
-            return response.status_code == 200
+            response = requests.get(url, timeout=30, headers=SUPER_HEADERS)
+            if response.status_code == 200:
+                return response.json()
         except:
-            return False
+            pass
+        
+        return None
 
-# ============= CC CHECKER =============
+api_client = SuperAPIClient()
+
+# ============= CC CHECKER SINIFI =============
 class CCChecker:
     @staticmethod
     def generate_card():
@@ -377,969 +284,574 @@ class CCChecker:
         }
     
     @staticmethod
-    def check_card_via_api(card_data):
-        api = APIClient()
-        return api.make_request("/api/check-single", card_data, "POST")
+    def check_card(card_data):
+        return api_client.make_request("/api/check-single", card_data, "POST", use_googlebot=True)
 
-# ============= ANA BOT =============
-class SuperCardBot:
-    def __init__(self):
-        self.db = Database()
-        self.api = APIClient()
-        self.app = None
-    
-    async def is_admin(self, user_id):
-        user = self.db.get_user(user_id)
-        return user and (user[7] == 1 or user_id in ADMIN_IDS)
-    
-    async def is_banned(self, user_id):
-        user = self.db.get_user(user_id)
-        return user and user[8] == 1
-    
-    async def check_channel_member(self, user_id):
-        try:
-            member = await self.app.bot.get_chat_member(CHANNEL_USERNAME, user_id)
-            return member.status in ['member', 'administrator', 'creator']
-        except:
-            return False
-    
-    # ============= KOMUTLAR =============
-    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update or not update.effective_user:
-            return
-        
-        user = update.effective_user
-        user_id = user.id
-        self.db.add_user(user_id, user.username, user.first_name, user.last_name)
-        
-        if await self.is_banned(user_id):
-            await update.message.reply_text("🚫 YASAKLANDIN!")
-            return
-        
-        if not await self.check_channel_member(user_id):
-            keyboard = [[InlineKeyboardButton("📢 Kanala Katil", url=f"https://t.me/{CHANNEL_USERNAME[1:]}")]]
-            await update.message.reply_text(f"⚠️ Once kanala katilmalisin!\n🔗 Kanal: {CHANNEL_USERNAME}", reply_markup=InlineKeyboardMarkup(keyboard))
-            return
-        
-        remaining = self.db.get_remaining_checks(user_id)
-        user_data = self.db.get_user(user_id)
-        is_premium = user_data[5] == 1 if user_data else False
-        api_status = "✅" if self.api.test_api() else "❌"
-        
-        clone_bots = self.db.get_clone_bots(user_id)
-        clone_count = len([b for b in clone_bots if b[4] == 1])
-        
-        welcome_text = f"""
-🚀 SUPER CC CHECKER BOT
+# ============= HTML TEMPLATE =============
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ api_name }}</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0a0a0a, #1a1a2e, #16213e);
+            color: #fff;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .header {
+            text-align: center;
+            padding: 40px 0;
+            border-bottom: 2px solid #e94560;
+            margin-bottom: 40px;
+        }
+        .header h1 {
+            font-size: 3rem;
+            background: linear-gradient(45deg, #e94560, #ff6b6b);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-shadow: 0 0 30px rgba(233, 69, 96, 0.3);
+        }
+        .header p {
+            color: #aaa;
+            font-size: 1.1rem;
+            margin-top: 10px;
+        }
+        .badge {
+            display: inline-block;
+            background: #e94560;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+        .stat-card {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.3s;
+        }
+        .stat-card:hover {
+            transform: translateY(-5px);
+            border-color: #e94560;
+        }
+        .stat-card .number {
+            font-size: 2.5rem;
+            font-weight: bold;
+            background: linear-gradient(45deg, #e94560, #ff6b6b);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .stat-card .label {
+            color: #aaa;
+            margin-top: 5px;
+        }
+        .endpoints {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+        .endpoint-card {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 25px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.3s;
+        }
+        .endpoint-card:hover {
+            transform: translateY(-5px);
+            border-color: #e94560;
+            box-shadow: 0 10px 30px rgba(233, 69, 96, 0.2);
+        }
+        .endpoint-card .method {
+            display: inline-block;
+            padding: 3px 12px;
+            border-radius: 5px;
+            font-size: 0.7rem;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .method.get { background: #4CAF50; }
+        .method.post { background: #FF9800; }
+        .method.put { background: #2196F3; }
+        .method.delete { background: #f44336; }
+        .endpoint-card .path {
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #fff;
+            margin: 10px 0;
+            font-family: 'Courier New', monospace;
+        }
+        .endpoint-card .desc {
+            color: #aaa;
+            font-size: 0.9rem;
+            margin: 10px 0;
+        }
+        .endpoint-card .example {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 15px;
+            border-radius: 10px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.8rem;
+            color: #8f8;
+            overflow-x: auto;
+            margin-top: 10px;
+        }
+        .endpoint-card .example .url {
+            color: #ff6b6b;
+        }
+        .endpoint-card .example .json {
+            color: #ffd93d;
+        }
+        .footer {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            margin-top: 40px;
+        }
+        .footer a {
+            color: #e94560;
+            text-decoration: none;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 3px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+        .status-badge.online { background: #4CAF50; color: #fff; }
+        .status-badge.offline { background: #f44336; color: #fff; }
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 30px 0;
+        }
+        .feature {
+            background: rgba(255, 255, 255, 0.03);
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        .feature .icon { font-size: 2rem; margin-bottom: 5px; }
+        .feature .name { color: #aaa; font-size: 0.9rem; }
+        @media (max-width: 768px) {
+            .header h1 { font-size: 2rem; }
+            .endpoints { grid-template-columns: 1fr; }
+            .stats { grid-template-columns: 1fr 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 {{ api_name }}</h1>
+            <p>Süper Güçlü CC Checker API - Tüm korumaları aşar!</p>
+            <span class="badge">v{{ version }}</span>
+            <span class="status-badge {{ status_class }}">{{ status_text }}</span>
+        </div>
 
-Merhaba {user.first_name}!
+        <div class="stats">
+            <div class="stat-card">
+                <div class="number">{{ total_endpoints }}</div>
+                <div class="label">📌 Toplam Endpoint</div>
+            </div>
+            <div class="stat-card">
+                <div class="number">{{ proxy_count }}</div>
+                <div class="label">🔄 Proxy Sayısı</div>
+            </div>
+            <div class="stat-card">
+                <div class="number">8</div>
+                <div class="label">🔄 Deneme Sayısı</div>
+            </div>
+            <div class="stat-card">
+                <div class="number">3</div>
+                <div class="label">🔧 İstek Yöntemi</div>
+            </div>
+        </div>
 
-📊 Istatistikler:
-• Kalan Hak: {remaining}
-• Premium: {'✅ Evet' if is_premium else '❌ Hayir'}
-• Toplam Kontrol: {user_data[10] if user_data else 0}
-• API Durumu: {api_status}
-• Clone Bot: {clone_count}/{MAX_CLONE_BOTS}
+        <h2 style="margin: 30px 0 20px 0; color: #e94560;">📡 Endpoint'ler</h2>
+        <div class="endpoints">
+            {% for endpoint in endpoints %}
+            <div class="endpoint-card">
+                <span class="method {{ endpoint.method.lower() }}">{{ endpoint.method }}</span>
+                <div class="path">{{ endpoint.path }}</div>
+                <div class="desc">{{ endpoint.description }}</div>
+                <div class="example">
+                    <div><span class="url">URL:</span> {{ endpoint.example.url }}</div>
+                    {% if endpoint.example.body %}
+                    <div><span class="json">Body:</span> {{ endpoint.example.body }}</div>
+                    {% endif %}
+                    <div><span class="json">Curl:</span> {{ endpoint.example.curl }}</div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
 
-📌 Komutlar:
-/generate - Rastgele kart uret
-/check - Tek kart kontrol
-/check_multiple - Coklu kart kontrol
-/stats - Istatistikler
-/help - Yardim
-/premium - Premium bilgileri
-/refer - Referans sistemi
-/clone - Bot klonla
-/myclones - Klon botlarim
-/api - API bilgileri
+        <h2 style="margin: 30px 0 20px 0; color: #e94560;">⚡ Özellikler</h2>
+        <div class="features">
+            <div class="feature">
+                <div class="icon">🛡️</div>
+                <div class="name">Cloudflare Bypass</div>
+            </div>
+            <div class="feature">
+                <div class="icon">🤖</div>
+                <div class="name">Googlebot Taklidi</div>
+            </div>
+            <div class="feature">
+                <div class="icon">🔄</div>
+                <div class="name">20+ Proxy</div>
+            </div>
+            <div class="feature">
+                <div class="icon">🔧</div>
+                <div class="name">3 İstek Yöntemi</div>
+            </div>
+            <div class="feature">
+                <div class="icon">⚡</div>
+                <div class="name">8 Deneme</div>
+            </div>
+            <div class="feature">
+                <div class="icon">📡</div>
+                <div class="name">SOCKS5 Desteği</div>
+            </div>
+        </div>
 
-⚡ Ozellikler:
-✅ 10+ Proxy destegi
-✅ Cloudflare koruma asma
-✅ Otomatik API yedekleme
-✅ Gunluk 5 ucretsiz hak
-✅ Clone bot sistemi
-        """
-        
-        keyboard = [
-            [InlineKeyboardButton("🎲 Kart Uret", callback_data="generate"), InlineKeyboardButton("✅ Tek Kart", callback_data="check_single")],
-            [InlineKeyboardButton("📋 Coklu Kart", callback_data="check_multiple"), InlineKeyboardButton("📊 Istatistik", callback_data="stats")],
-            [InlineKeyboardButton("⭐ Premium", callback_data="premium"), InlineKeyboardButton("👥 Referans", callback_data="refer")],
-            [InlineKeyboardButton("🔄 Clone Bot", callback_data="clone"), InlineKeyboardButton("📡 API", callback_data="api")],
-            [InlineKeyboardButton("❓ Yardim", callback_data="help"), InlineKeyboardButton("🔄 Guncelle", callback_data="refresh")]
-        ]
-        
-        if await self.is_admin(user_id):
-            keyboard.append([InlineKeyboardButton("👑 Admin Panel", callback_data="admin_panel")])
-        
-        await update.message.reply_text(welcome_text, reply_markup=InlineKeyboardMarkup(keyboard))
-    
-    async def generate_cards(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update or not update.effective_user:
-            return
-        
-        user_id = update.effective_user.id
-        message_obj = update.message
-        
-        if await self.is_banned(user_id):
-            await message_obj.reply_text("🚫 YASAKLANDIN!")
-            return
-        
-        if not await self.check_channel_member(user_id):
-            await message_obj.reply_text(f"⚠️ Once {CHANNEL_USERNAME} kanalina katil!")
-            return
-        
-        remaining = self.db.get_remaining_checks(user_id)
-        if remaining <= 0:
-            await message_obj.reply_text("❌ Gunluk hakkin bitti! Yarin tekrar dene.")
-            return
-        
-        try:
-            count = 1
-            if context.args and context.args[0].isdigit():
-                count = min(int(context.args[0]), remaining, 20)
-            
-            status_msg = await message_obj.reply_text("⏳ Kart uretiliyor...")
-            
-            cards = []
-            for _ in range(count):
-                card = CCChecker.generate_card()
-                cards.append(card)
-            
-            if cards:
-                self.db.add_daily_check(user_id)
-                message = f"🎲 {len(cards)} Kart Uretildi:\n\n"
-                for i, card in enumerate(cards, 1):
-                    message += f"{i}. {card['number']}|{card['month']}|{card['year']}|{card['cvv']}\n"
-                
-                remaining = self.db.get_remaining_checks(user_id)
-                message += f"\n📊 Kalan Hak: {remaining}"
-                
-                await status_msg.edit_text(message)
-        except Exception as e:
-            await message_obj.reply_text(f"❌ Hata: {str(e)}")
-    
-    async def check_single_card(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update or not update.effective_user:
-            return
-        
-        user_id = update.effective_user.id
-        message_obj = update.message
-        
-        if await self.is_banned(user_id):
-            await message_obj.reply_text("🚫 YASAKLANDIN!")
-            return
-        
-        if not await self.check_channel_member(user_id):
-            await message_obj.reply_text(f"⚠️ Once {CHANNEL_USERNAME} kanalina katil!")
-            return
-        
-        remaining = self.db.get_remaining_checks(user_id)
-        if remaining <= 0:
-            await message_obj.reply_text("❌ Gunluk hakkin bitti! Yarin tekrar dene.")
-            return
-        
-        try:
-            if context.args:
-                card_data = context.args[0]
-            else:
-                await message_obj.reply_text("❌ Kart bilgilerini girin!\nFormat: /check 4111111111111111|12|2026|123")
-                return
-            
-            parts = card_data.split('|')
-            if len(parts) != 4:
-                await message_obj.reply_text("❌ Hatali format! Dogru: 4111111111111111|12|2026|123")
-                return
-            
-            card = {
-                "number": parts[0].strip(),
-                "month": parts[1].strip().zfill(2),
-                "year": parts[2].strip(),
-                "cvv": parts[3].strip()
+        <div class="footer">
+            <p>💻 {{ api_name }} | © 2026 | <a href="{{ api_url }}">{{ api_url }}</a></p>
+            <p style="color: #444; font-size: 0.8rem; margin-top: 5px;">🔥 Süper güçlü, tüm korumaları aşan CC Checker API</p>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+# ============= ANA SAYFA =============
+@app.route('/', methods=['GET'])
+def home():
+    """Ana sayfa - API dokümantasyonu"""
+    endpoints = [
+        {
+            "method": "GET",
+            "path": "/",
+            "description": "API ana sayfası - dokümantasyon",
+            "example": {
+                "url": f"{API_URL}/",
+                "curl": f"curl {API_URL}/"
             }
+        },
+        {
+            "method": "GET",
+            "path": "/api/generate",
+            "description": "Rastgele kart üret (count parametresi ile adet belirtebilirsin)",
+            "example": {
+                "url": f"{API_URL}/api/generate?count=5",
+                "curl": f"curl {API_URL}/api/generate?count=5"
+            }
+        },
+        {
+            "method": "POST",
+            "path": "/api/check-single",
+            "description": "Tek kart kontrol et",
+            "example": {
+                "url": f"{API_URL}/api/check-single",
+                "body": '{"number":"4111111111111111","month":"12","year":"2026","cvv":"123"}',
+                "curl": f"curl -X POST {API_URL}/api/check-single -H 'Content-Type: application/json' -d '{{\"number\":\"4111111111111111\",\"month\":\"12\",\"year\":\"2026\",\"cvv\":\"123\"}}'"
+            }
+        },
+        {
+            "method": "POST",
+            "path": "/api/check",
+            "description": "Çoklu kart kontrol et",
+            "example": {
+                "url": f"{API_URL}/api/check",
+                "body": '{"cards":[{"number":"4111111111111111","month":"12","year":"2026","cvv":"123"}]}',
+                "curl": f"curl -X POST {API_URL}/api/check -H 'Content-Type: application/json' -d '{{\"cards\":[{{\"number\":\"4111111111111111\",\"month\":\"12\",\"year\":\"2026\",\"cvv\":\"123\"}}]}}'"
+            }
+        },
+        {
+            "method": "GET",
+            "path": "/api/stats",
+            "description": "API istatistikleri",
+            "example": {
+                "url": f"{API_URL}/api/stats",
+                "curl": f"curl {API_URL}/api/stats"
+            }
+        },
+        {
+            "method": "GET",
+            "path": "/api/health",
+            "description": "API sağlık kontrolü",
+            "example": {
+                "url": f"{API_URL}/api/health",
+                "curl": f"curl {API_URL}/api/health"
+            }
+        }
+    ]
+    
+    # API durumu
+    try:
+        response = requests.get(f"{API_URL}/api/stats", timeout=5)
+        status_online = response.status_code == 200
+    except:
+        status_online = False
+    
+    return render_template_string(
+        HTML_TEMPLATE,
+        api_name=API_NAME,
+        version=API_VERSION,
+        api_url=API_URL,
+        total_endpoints=len(endpoints),
+        proxy_count=len(api_client.proxy_manager.proxies),
+        endpoints=endpoints,
+        status_text="🟢 Online" if status_online else "🔴 Offline",
+        status_class="online" if status_online else "offline"
+    )
+
+# ============= API ENDPOINT'LERİ =============
+@app.route('/api/generate', methods=['GET'])
+def generate_cards():
+    """Rastgele kart üret"""
+    try:
+        count = request.args.get('count', default=1, type=int)
+        count = min(max(count, 1), 100)
+        
+        cards = []
+        for _ in range(count):
+            card = CCChecker.generate_card()
+            cards.append(card)
+        
+        return jsonify({
+            "status": "success",
+            "count": len(cards),
+            "cards": cards,
+            "timestamp": datetime.now().isoformat()
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+@app.route('/api/check-single', methods=['POST'])
+def check_single_card():
+    """Tek kart kontrol"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                "status": "error",
+                "message": "No data provided",
+                "timestamp": datetime.now().isoformat()
+            }), 400
+        
+        required = ['number', 'month', 'year', 'cvv']
+        for field in required:
+            if field not in data:
+                return jsonify({
+                    "status": "error",
+                    "message": f"Missing field: {field}",
+                    "timestamp": datetime.now().isoformat()
+                }), 400
+        
+        # Kartı kontrol et
+        result = CCChecker.check_card(data)
+        
+        if result and result.get('status') == 'success':
+            return jsonify({
+                "status": "success",
+                "result": result.get('result', {}),
+                "timestamp": datetime.now().isoformat()
+            })
+        else:
+            # Doğrudan API'ye istek dene
+            try:
+                direct = requests.post(
+                    f"{API_URL}/api/check-single",
+                    json=data,
+                    timeout=30,
+                    headers=SUPER_HEADERS
+                )
+                if direct.status_code == 200:
+                    return jsonify({
+                        "status": "success",
+                        "result": direct.json().get('result', {}),
+                        "timestamp": datetime.now().isoformat()
+                    })
+            except:
+                pass
             
-            status_msg = await message_obj.reply_text("⏳ Kart kontrol ediliyor...")
+            return jsonify({
+                "status": "error",
+                "message": "Card check failed - API unreachable",
+                "timestamp": datetime.now().isoformat()
+            }), 500
             
-            result = await asyncio.to_thread(CCChecker.check_card_via_api, card)
-            
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+@app.route('/api/check', methods=['POST'])
+def check_multiple_cards():
+    """Çoklu kart kontrol"""
+    try:
+        data = request.get_json()
+        if not data or 'cards' not in data:
+            return jsonify({
+                "status": "error",
+                "message": "No cards provided",
+                "timestamp": datetime.now().isoformat()
+            }), 400
+        
+        cards = data.get('cards', [])
+        if not isinstance(cards, list):
+            return jsonify({
+                "status": "error",
+                "message": "Cards must be an array",
+                "timestamp": datetime.now().isoformat()
+            }), 400
+        
+        results = []
+        live_count = 0
+        
+        for card in cards:
+            result = CCChecker.check_card(card)
             if result and result.get('status') == 'success':
                 result_data = result.get('result', {})
-                card_status = result_data.get('status', 'unknown')
-                gateway = result_data.get('gateway', 'Bilinmiyor')
-                message_text = result_data.get('message', '')
-                
-                self.db.add_card_result(user_id, card, card_status, gateway, message_text)
-                self.db.add_daily_check(user_id)
-                
-                if card_status == 'approved':
-                    status_text = "✅ CANLI"
-                    await message_obj.reply_text("🎉 TEBRIKLER! KART CANLI!")
-                elif card_status == 'declined':
-                    status_text = "❌ OLU"
-                else:
-                    status_text = "⚠️ BILINMIYOR"
-                
-                response_text = f"""
-{status_text} Kart Kontrol Sonucu
-
-📱 Kart: {card['number']}
-📅 Tarih: {card['month']}/{card['year']}
-🔐 CVV: {card['cvv']}
-🏦 Gateway: {gateway}
-💬 Mesaj: {message_text[:200]}
-
-📊 Kalan Hak: {self.db.get_remaining_checks(user_id)}
-                """
-                await status_msg.edit_text(response_text)
+                if result_data.get('status') == 'approved':
+                    live_count += 1
+                results.append(result_data)
             else:
-                await status_msg.edit_text("❌ Hata olustu! API'ye baglanilamiyor.")
-                
-        except Exception as e:
-            await message_obj.reply_text(f"❌ Hata: {str(e)}")
+                results.append({
+                    "card": card,
+                    "status": "error",
+                    "message": "Check failed"
+                })
+        
+        return jsonify({
+            "status": "success",
+            "total": len(results),
+            "live_count": live_count,
+            "results": results,
+            "timestamp": datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+@app.route('/api/stats', methods=['GET'])
+def api_stats():
+    """API istatistikleri"""
+    return jsonify({
+        "status": "success",
+        "name": API_NAME,
+        "version": API_VERSION,
+        "api_url": API_URL,
+        "proxy_count": len(api_client.proxy_manager.proxies),
+        "timestamp": datetime.now().isoformat(),
+        "endpoints": {
+            "/": "Ana sayfa - dokümantasyon",
+            "/api/generate": "Kart üret",
+            "/api/check-single": "Tek kart kontrol",
+            "/api/check": "Çoklu kart kontrol",
+            "/api/stats": "İstatistikler",
+            "/api/health": "Sağlık kontrolü"
+        }
+    })
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Sağlık kontrolü"""
+    try:
+        # Ana API'ye istek at
+        response = requests.get(f"{API_URL}/api/stats", timeout=5)
+        main_api_status = response.status_code == 200
+    except:
+        main_api_status = False
     
-    async def check_multiple_cards(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update or not update.effective_user:
-            return
-        
-        user_id = update.effective_user.id
-        message_obj = update.message
-        
-        if await self.is_banned(user_id):
-            await message_obj.reply_text("🚫 YASAKLANDIN!")
-            return
-        
-        if not await self.check_channel_member(user_id):
-            await message_obj.reply_text(f"⚠️ Once {CHANNEL_USERNAME} kanalina katil!")
-            return
-        
-        remaining = self.db.get_remaining_checks(user_id)
-        if remaining <= 0:
-            await message_obj.reply_text("❌ Gunluk hakkin bitti! Yarin tekrar dene.")
-            return
-        
-        await message_obj.reply_text(
-            "📋 Kartlari gonderin!\n\n"
-            "Her karti alt alta yazin:\n"
-            "4111111111111111|12|2026|123\n\n"
-            "Iptal: /cancel"
-        )
-        context.user_data['multi_check'] = True
-    
-    async def clone_bot(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update or not update.effective_user:
-            return
-        
-        user_id = update.effective_user.id
-        message_obj = update.message
-        
-        if await self.is_banned(user_id):
-            await message_obj.reply_text("🚫 YASAKLANDIN!")
-            return
-        
-        if not await self.check_channel_member(user_id):
-            await message_obj.reply_text(f"⚠️ Once {CHANNEL_USERNAME} kanalina katil!")
-            return
-        
-        user = self.db.get_user(user_id)
-        is_premium = user[5] == 1 if user else False
-        
-        if not is_premium and user_id not in ADMIN_IDS:
-            await message_obj.reply_text("❌ Clone bot sadece PREMIUM kullanicilara ozeldir!")
-            return
-        
-        clone_bots = self.db.get_clone_bots(user_id)
-        active_clones = [b for b in clone_bots if b[4] == 1]
-        
-        if len(active_clones) >= MAX_CLONE_BOTS:
-            await message_obj.reply_text(f"❌ Maximum {MAX_CLONE_BOTS} clone bot olusturabilirsin!")
-            return
-        
-        await message_obj.reply_text(
-            "🤖 Clone Bot Olustur\n\n"
-            "BotFather'dan aldigin TOKEN'i gonder:\n"
-            "YOUR_BOT_TOKEN\n\n"
-            "Iptal: /cancel"
-        )
-        context.user_data['waiting_clone_token'] = True
-    
-    async def handle_clone_token(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update or not update.effective_user:
-            return
-        
-        user_id = update.effective_user.id
-        message_obj = update.message
-        token = message_obj.text.strip()
-        
-        if token.startswith('/'):
-            return
-        
-        if ':' not in token:
-            await message_obj.reply_text("❌ Gecersiz token! BotFather'dan aldigin token'i gonder.")
-            return
-        
-        try:
-            bot_info = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=10)
-            if bot_info.status_code != 200:
-                await message_obj.reply_text("❌ Gecersiz token! Bot calismiyor.")
-                return
-            
-            bot_data = bot_info.json()
-            if not bot_data.get('ok'):
-                await message_obj.reply_text("❌ Gecersiz token!")
-                return
-            
-            bot_username = bot_data['result'].get('username', 'Unknown')
-            
-            success, msg = self.db.add_clone_bot(token, bot_username, user_id)
-            
-            if success:
-                await message_obj.reply_text(
-                    f"✅ Clone Bot Olusturuldu!\n\n"
-                    f"🤖 Bot: @{bot_username}\n"
-                    f"👤 Sahip: {user_id}\n"
-                    f"📅 Tarih: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
-                )
-            else:
-                await message_obj.reply_text(f"❌ {msg}")
-                
-        except Exception as e:
-            await message_obj.reply_text(f"❌ Hata: {str(e)}")
-        
-        context.user_data['waiting_clone_token'] = False
-    
-    async def my_clones(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update or not update.effective_user:
-            return
-        
-        user_id = update.effective_user.id
-        message_obj = update.message
-        
-        clone_bots = self.db.get_clone_bots(user_id)
-        if not clone_bots:
-            await message_obj.reply_text("❌ Henuz clone botun yok!\n/clone ile olustur.")
-            return
-        
-        message = "🤖 Klon Botlarin:\n\n"
-        for bot in clone_bots:
-            status = "✅ Aktif" if bot[4] == 1 else "❌ Pasif"
-            message += f"• @{bot[2]} - {status}\n"
-            message += f"  Token: {bot[1][:15]}...\n"
-            message += f"  Kontrol: {bot[5]}\n"
-            message += f"  ID: {bot[0]}\n\n"
-        
-        keyboard = [[InlineKeyboardButton("🗑️ Klon Bot Sil", callback_data="remove_clone")]]
-        await message_obj.reply_text(message, reply_markup=InlineKeyboardMarkup(keyboard))
-    
-    async def remove_clone(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update or not update.effective_user:
-            return
-        
-        user_id = update.effective_user.id
-        message_obj = update.message
-        
-        clone_bots = self.db.get_clone_bots(user_id)
-        if not clone_bots:
-            await message_obj.reply_text("❌ Silinecek clone bot yok!")
-            return
-        
-        keyboard = []
-        for bot in clone_bots:
-            if bot[4] == 1:
-                keyboard.append([InlineKeyboardButton(f"🗑️ @{bot[2]}", callback_data=f"delclone_{bot[0]}")])
-        keyboard.append([InlineKeyboardButton("❌ Iptal", callback_data="cancel")])
-        
-        await message_obj.reply_text(
-            "🗑️ Silmek istedigin botu sec:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    
-    async def api_info(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update or not update.effective_user:
-            return
-        
-        message_obj = update.message
-        api_status = "✅ Calisiyor" if self.api.test_api() else "❌ Calismiyor"
-        
-        message = f"""
-📡 API BILGILERI
+    return jsonify({
+        "status": "healthy" if main_api_status else "degraded",
+        "main_api": "online" if main_api_status else "offline",
+        "proxy_count": len(api_client.proxy_manager.proxies),
+        "timestamp": datetime.now().isoformat()
+    })
 
-🔗 Ana API: {MAIN_API_URL}
-📊 Durum: {api_status}
-🔄 Proxy Sayisi: {len(self.api.proxies)}
+# ============= CORS DESTEĞİ =============
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
+    return response
 
-📌 Endpoint'ler:
-• /api/generate - Kart uret
-• /api/check-single - Tek kart kontrol
-• /api/check - Coklu kart kontrol
-• /api/stats - Istatistikler
+# ============= HATA YÖNETİMİ =============
+@app.errorhandler(404)
+def not_found(e):
+    return jsonify({
+        "status": "error",
+        "message": "Endpoint not found",
+        "available_endpoints": [
+            "/",
+            "/api/generate",
+            "/api/check-single",
+            "/api/check",
+            "/api/stats",
+            "/api/health"
+        ],
+        "timestamp": datetime.now().isoformat()
+    }), 404
 
-📝 Kullanim:
-POST {API_ENDPOINTS['check_single']}
-{{
-  "number": "4111111111111111",
-  "month": "12",
-  "year": "2026",
-  "cvv": "123"
-}}
+@app.errorhandler(500)
+def internal_error(e):
+    return jsonify({
+        "status": "error",
+        "message": "Internal server error",
+        "timestamp": datetime.now().isoformat()
+    }), 500
 
-🔧 Ozellikler:
-• 10+ Proxy
-• Cloudflare koruma asma
-• Otomatik yedekleme
-• Hizli kontrol
-        """
-        
-        await message_obj.reply_text(message)
-    
-    async def stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update or not update.effective_user:
-            return
-        
-        user_id = update.effective_user.id
-        message_obj = update.message
-        
-        if await self.is_banned(user_id):
-            await message_obj.reply_text("🚫 YASAKLANDIN!")
-            return
-        
-        user = self.db.get_user(user_id)
-        stats = self.db.get_user_stats(user_id)
-        remaining = self.db.get_remaining_checks(user_id)
-        
-        if not user:
-            await message_obj.reply_text("❌ Kullanici bulunamadi!")
-            return
-        
-        is_premium = user[5] == 1
-        
-        message = f"""
-📊 ISTATISTIKLERIN
-
-👤 Kullanici: @{user[1] or user[2] or 'Bilinmiyor'}
-
-📊 Kart Istatistikleri:
-• Toplam Kontrol: {stats[0] if stats else 0}
-• Canli Kart: {stats[1] if stats else 0}
-• Olu Kart: {stats[2] if stats else 0}
-• Basari Orani: {f"{(stats[1]/stats[0]*100):.1f}%" if stats and stats[0] > 0 else "0%"}
-
-📅 Gunluk Durum:
-• Kalan Hak: {remaining}
-• Gunluk Limit: {'Sinirsiz' if is_premium else DAILY_LIMIT}
-
-⭐ Premium: {'✅ Aktif' if is_premium else '❌ Pasif'}
-        """
-        
-        await message_obj.reply_text(message)
-    
-    async def help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update or not update.effective_user:
-            return
-        
-        message_obj = update.message
-        
-        help_text = """
-📖 KULLANIM KILAVUZU
-
-🔹 Temel Komutlar:
-/generate - Rastgele kart uret
-/check - Tek kart kontrol et
-/check_multiple - Coklu kart kontrol et
-/stats - Istatistiklerini gor
-/help - Bu yardim menusu
-
-🔹 Premium Komutlar:
-/premium - Premium paketleri gor
-/refer - Referans sistemini kullan
-/clone - Bot klonla
-/myclones - Klon botlarim
-
-🔹 Admin Komutlari:
-/admin - Admin paneli
-/broadcast - Duyuru gonder
-/add_premium - Premium ver
-/remove_premium - Premium al
-/ban - Kullanici banla
-/unban - Ban kaldir
-
-📋 Kart Formati:
-4111111111111111|12|2026|123
-
-⚡ Ozellikler:
-• Gunluk 5 ucretsiz hak
-• Premium ile sinirsiz
-• 10+ Proxy destegi
-• Cloudflare koruma asma
-• Clone bot sistemi
-• Detayli istatistikler
-        """
-        
-        keyboard = [
-            [InlineKeyboardButton("📊 Istatistikler", callback_data="stats"), InlineKeyboardButton("⭐ Premium", callback_data="premium")],
-            [InlineKeyboardButton("🤖 Clone Bot", callback_data="clone"), InlineKeyboardButton("📡 API", callback_data="api")]
-        ]
-        
-        await message_obj.reply_text(help_text, reply_markup=InlineKeyboardMarkup(keyboard))
-    
-    async def premium(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update or not update.effective_user:
-            return
-        
-        message_obj = update.message
-        
-        message = """
-⭐ PREMIUM PAKETLER
-
-🚀 Premium ile sinirsiz kontrol!
-
-📦 Paketler:
-• 7 Gun - 5$
-• 30 Gun - 15$
-• 90 Gun - 35$
-• 365 Gun - 100$
-
-✨ Premium Avantajlari:
-✅ Sinirsiz kart kontrol
-✅ Clone bot hakki (2 bot)
-✅ Oncelikli destek
-✅ Hizli kontrol
-✅ Daha yuksek basari orani
-
-📞 Iletisim: @rinexdestek
-        """
-        await message_obj.reply_text(message)
-    
-    async def refer(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update or not update.effective_user:
-            return
-        
-        user_id = update.effective_user.id
-        message_obj = update.message
-        user = self.db.get_user(user_id)
-        
-        if not user:
-            return
-        
-        ref_link = f"https://t.me/{context.bot.username}?start=ref_{user_id}"
-        ref_count = user[12] if len(user) > 12 else 0
-        
-        message = f"""
-👥 REFERANS SISTEMI
-
-Her referans icin 1 ekstra hak kazan!
-
-📌 Referans Linkin:
-{ref_link}
-
-👤 Toplam Referans: {ref_count}
-⭐ Kazanilan Hak: {ref_count}
-
-🎁 Bonus:
-10 referans = 7 gun premium
-25 referans = 30 gun premium
-        """
-        
-        keyboard = [[InlineKeyboardButton("📤 Paylas", switch_inline_query=ref_link)]]
-        await message_obj.reply_text(message, reply_markup=InlineKeyboardMarkup(keyboard))
-    
-    # ============= ADMIN KOMUTLARI =============
-    async def admin_panel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update or not update.effective_user:
-            return
-        
-        user_id = update.effective_user.id
-        message_obj = update.message
-        
-        if not await self.is_admin(user_id):
-            await message_obj.reply_text("❌ Bu komut sadece adminler icindir!")
-            return
-        
-        users = self.db.get_all_users()
-        total_users = len(users)
-        premium_users = sum(1 for u in users if u[4] == 1)
-        banned_users = sum(1 for u in users if u[5] == 1)
-        
-        self.db.cursor.execute('SELECT COUNT(*), SUM(CASE WHEN status="approved" THEN 1 ELSE 0 END) FROM card_results')
-        total_checks, live_checks = self.db.cursor.fetchone()
-        
-        clone_bots = self.db.get_all_clone_bots()
-        
-        message = f"""
-👑 ADMIN PANELI
-
-📊 Genel Istatistikler:
-• Toplam Kullanici: {total_users}
-• Premium Kullanici: {premium_users}
-• Yasakli Kullanici: {banned_users}
-• Toplam Kontrol: {total_checks or 0}
-• Canli Kart: {live_checks or 0}
-• Clone Bot: {len(clone_bots)}
-
-📌 Admin Komutlari:
-/broadcast - Duyuru gonder
-/add_premium - Premium ver
-/remove_premium - Premium al
-/ban - Kullanici banla
-/unban - Ban kaldir
-        """
-        
-        await message_obj.reply_text(message)
-    
-    async def broadcast(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update or not update.effective_user:
-            return
-        
-        user_id = update.effective_user.id
-        message_obj = update.message
-        
-        if not await self.is_admin(user_id):
-            return
-        
-        if not context.args:
-            await message_obj.reply_text("❌ Mesaj gir!\nFormat: /broadcast Merhaba herkese!")
-            return
-        
-        message = ' '.join(context.args)
-        users = self.db.get_all_users()
-        sent = 0
-        failed = 0
-        
-        status_msg = await message_obj.reply_text(f"⏳ {len(users)} kullaniciya mesaj gonderiliyor...")
-        
-        for user in users:
-            try:
-                await self.app.bot.send_message(user[0], f"📢 DUYURU\n\n{message}")
-                sent += 1
-                await asyncio.sleep(0.1)
-            except:
-                failed += 1
-        
-        await status_msg.edit_text(f"✅ Duyuru gonderildi!\n\n📤 Gonderilen: {sent}\n❌ Basarisiz: {failed}")
-    
-    async def add_premium(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update or not update.effective_user:
-            return
-        
-        user_id = update.effective_user.id
-        message_obj = update.message
-        
-        if not await self.is_admin(user_id):
-            return
-        
-        if len(context.args) < 2:
-            await message_obj.reply_text("❌ Kullanici ID ve sure girin!\nFormat: /add_premium 123456 30")
-            return
-        
-        try:
-            target_id = int(context.args[0])
-            days = int(context.args[1])
-            
-            expiry = (datetime.now() + timedelta(days=days)).isoformat()
-            self.db.update_user(target_id, is_premium=1, premium_expiry=expiry)
-            
-            try:
-                await self.app.bot.send_message(target_id, f"⭐ PREMIUM VERILDI!\n\n📅 Sure: {days} gun\n📆 Bitis: {expiry[:10]}")
-            except:
-                pass
-            
-            await message_obj.reply_text(f"✅ Premium verildi! Kullanici: {target_id}")
-        except:
-            await message_obj.reply_text("❌ Hatali format!")
-    
-    async def remove_premium(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update or not update.effective_user:
-            return
-        
-        user_id = update.effective_user.id
-        message_obj = update.message
-        
-        if not await self.is_admin(user_id):
-            return
-        
-        if not context.args:
-            await message_obj.reply_text("❌ Kullanici ID girin!\nFormat: /remove_premium 123456")
-            return
-        
-        try:
-            target_id = int(context.args[0])
-            self.db.update_user(target_id, is_premium=0, premium_expiry=None)
-            
-            try:
-                await self.app.bot.send_message(target_id, "❌ PREMIUM ALINDI!")
-            except:
-                pass
-            
-            await message_obj.reply_text(f"✅ Premium alindi: {target_id}")
-        except:
-            await message_obj.reply_text("❌ Hatali format!")
-    
-    async def ban_user(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update or not update.effective_user:
-            return
-        
-        user_id = update.effective_user.id
-        message_obj = update.message
-        
-        if not await self.is_admin(user_id):
-            return
-        
-        if not context.args:
-            await message_obj.reply_text("❌ Kullanici ID girin!\nFormat: /ban 123456")
-            return
-        
-        try:
-            target_id = int(context.args[0])
-            self.db.update_user(target_id, is_banned=1)
-            
-            try:
-                await self.app.bot.send_message(target_id, "🚫 YASAKLANDIN!")
-            except:
-                pass
-            
-            await message_obj.reply_text(f"✅ Kullanici yasaklandi: {target_id}")
-        except:
-            await message_obj.reply_text("❌ Hatali format!")
-    
-    async def unban_user(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update or not update.effective_user:
-            return
-        
-        user_id = update.effective_user.id
-        message_obj = update.message
-        
-        if not await self.is_admin(user_id):
-            return
-        
-        if not context.args:
-            await message_obj.reply_text("❌ Kullanici ID girin!\nFormat: /unban 123456")
-            return
-        
-        try:
-            target_id = int(context.args[0])
-            self.db.update_user(target_id, is_banned=0)
-            
-            try:
-                await self.app.bot.send_message(target_id, "✅ YASAK KALDIRILDI!")
-            except:
-                pass
-            
-            await message_obj.reply_text(f"✅ Yasa kaldirildi: {target_id}")
-        except:
-            await message_obj.reply_text("❌ Hatali format!")
-    
-    # ============= HANDLER'LAR =============
-    async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update or not update.callback_query:
-            return
-        
-        query = update.callback_query
-        user_id = query.from_user.id
-        await query.answer()
-        
-        data = query.data
-        
-        if await self.is_banned(user_id):
-            await query.edit_message_text("🚫 YASAKLANDIN!")
-            return
-        
-        # Callback'ten gelenleri işle - mesaj objesini context'e kaydet
-        if data == "generate":
-            # Yeni bir message oluştur
-            await query.edit_message_text("⏳ Kart üretiliyor...")
-            # generate_cards'a message gönder
-            context.user_data['callback_message'] = query.message
-            await self.generate_cards(update, context)
-            
-        elif data == "check_single":
-            await query.edit_message_text("✅ Format: /check 4111111111111111|12|2026|123")
-            
-        elif data == "check_multiple":
-            await query.edit_message_text("📋 /check_multiple yazip kartlari gonder.")
-            
-        elif data == "stats":
-            await self.stats(update, context)
-            
-        elif data == "premium":
-            await self.premium(update, context)
-            
-        elif data == "refer":
-            await self.refer(update, context)
-            
-        elif data == "help":
-            await self.help(update, context)
-            
-        elif data == "refresh":
-            await query.edit_message_text("🔄 Guncelleniyor...")
-            await self.start(update, context)
-            
-        elif data == "admin_panel":
-            await self.admin_panel(update, context)
-            
-        elif data == "clone":
-            await self.clone_bot(update, context)
-            
-        elif data == "api":
-            await self.api_info(update, context)
-            
-        elif data == "remove_clone":
-            await self.remove_clone(update, context)
-            
-        elif data.startswith("delclone_"):
-            bot_id = int(data.split("_")[1])
-            if self.db.remove_clone_bot(bot_id, user_id):
-                await query.edit_message_text("✅ Clone bot silindi!")
-            else:
-                await query.edit_message_text("❌ Silme basarisiz!")
-                
-        elif data == "cancel":
-            await query.edit_message_text("✅ Islem iptal edildi!")
-    
-    async def handle_messages(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update or not update.effective_user:
-            return
-        
-        user_id = update.effective_user.id
-        message_obj = update.message
-        text = message_obj.text
-        
-        if await self.is_banned(user_id):
-            await message_obj.reply_text("🚫 YASAKLANDIN!")
-            return
-        
-        if context.user_data.get('waiting_clone_token'):
-            await self.handle_clone_token(update, context)
-            return
-        
-        if context.user_data.get('multi_check'):
-            if text.lower() == '/cancel':
-                context.user_data['multi_check'] = False
-                await message_obj.reply_text("✅ Islem iptal edildi!")
-                return
-            
-            cards = []
-            lines = text.strip().split('\n')
-            remaining = self.db.get_remaining_checks(user_id)
-            max_cards = min(len(lines), remaining)
-            
-            for line in lines[:max_cards]:
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                parts = line.split('|')
-                if len(parts) == 4:
-                    cards.append({"number": parts[0].strip(), "month": parts[1].strip().zfill(2), 
-                                 "year": parts[2].strip(), "cvv": parts[3].strip()})
-            
-            if not cards:
-                await message_obj.reply_text("❌ Gecerli kart bulunamadi!")
-                return
-            
-            status_msg = await message_obj.reply_text(f"⏳ {len(cards)} kart kontrol ediliyor...")
-            
-            results = []
-            for card in cards:
-                result = await asyncio.to_thread(CCChecker.check_card_via_api, card)
-                if result and result.get('status') == 'success':
-                    result_data = result.get('result', {})
-                    status = result_data.get('status', 'unknown')
-                    gateway = result_data.get('gateway', '')
-                    message_text = result_data.get('message', '')
-                    self.db.add_card_result(user_id, card, status, gateway, message_text)
-                    results.append({"card": card, "status": status, "gateway": gateway})
-                    self.db.add_daily_check(user_id)
-            
-            if results:
-                live = sum(1 for r in results if r['status'] == 'approved')
-                message = f"📊 {len(results)} Kart Kontrol Sonucu:\n✅ Canli: {live}\n❌ Olu: {len(results)-live}\n\n"
-                
-                for r in results:
-                    c = r['card']
-                    emoji = "✅" if r['status'] == 'approved' else "❌"
-                    message += f"{emoji} {c['number']}|{c['month']}|{c['year']}|{c['cvv']}\n"
-                
-                message += f"\n📊 Kalan Hak: {self.db.get_remaining_checks(user_id)}"
-                await status_msg.edit_text(message)
-            else:
-                await status_msg.edit_text("❌ Hata olustu!")
-            
-            context.user_data['multi_check'] = False
-    
-    async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update or not update.effective_user:
-            return
-        
-        user_id = update.effective_user.id
-        message_obj = update.message
-        
-        if user_id in context.user_data:
-            context.user_data.clear()
-            await message_obj.reply_text("✅ Islem iptal edildi!")
-        else:
-            await message_obj.reply_text("❌ Aktif islem bulunamadi!")
-    
-    # ============= BOTU BAŞLAT =============
-    def run(self):
-        try:
-            # Webhook'u temizle
-            import asyncio
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            temp_app = Application.builder().token(BOT_TOKEN).build()
-            loop.run_until_complete(temp_app.bot.delete_webhook())
-            
-            self.app = Application.builder().token(BOT_TOKEN).build()
-            
-            # Handler'lar
-            self.app.add_handler(CommandHandler("start", self.start))
-            self.app.add_handler(CommandHandler("help", self.help))
-            self.app.add_handler(CommandHandler("generate", self.generate_cards))
-            self.app.add_handler(CommandHandler("check", self.check_single_card))
-            self.app.add_handler(CommandHandler("check_multiple", self.check_multiple_cards))
-            self.app.add_handler(CommandHandler("stats", self.stats))
-            self.app.add_handler(CommandHandler("premium", self.premium))
-            self.app.add_handler(CommandHandler("refer", self.refer))
-            self.app.add_handler(CommandHandler("clone", self.clone_bot))
-            self.app.add_handler(CommandHandler("myclones", self.my_clones))
-            self.app.add_handler(CommandHandler("api", self.api_info))
-            self.app.add_handler(CommandHandler("cancel", self.cancel))
-            
-            self.app.add_handler(CommandHandler("admin", self.admin_panel))
-            self.app.add_handler(CommandHandler("broadcast", self.broadcast))
-            self.app.add_handler(CommandHandler("add_premium", self.add_premium))
-            self.app.add_handler(CommandHandler("remove_premium", self.remove_premium))
-            self.app.add_handler(CommandHandler("ban", self.ban_user))
-            self.app.add_handler(CommandHandler("unban", self.unban_user))
-            
-            self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_messages))
-            self.app.add_handler(CallbackQueryHandler(self.handle_callback))
-            
-            print("🚀 Super CC Checker Bot baslatiliyor...")
-            print(f"👑 Adminler: {ADMIN_IDS}")
-            print(f"📌 Kanal: {CHANNEL_USERNAME}")
-            print(f"📊 Gunluk Limit: {DAILY_LIMIT}")
-            print(f"🔄 Proxy sayisi: {len(self.api.proxies)}")
-            print(f"📡 API Durumu: {'✅ Calisiyor' if self.api.test_api() else '❌ Calismiyor'}")
-            print("✅ Bot calisiyor!")
-            
-            # Polling ile başlat - conflict hatasını önlemek için
-            loop.run_until_complete(self.app.initialize())
-            loop.run_until_complete(self.app.start())
-            loop.run_until_complete(self.app.updater.start_polling(
-                allowed_updates=Update.ALL_TYPES,
-                drop_pending_updates=True,
-                poll_interval=1.0
-            ))
-            
-            loop.run_forever()
-            
-        except KeyboardInterrupt:
-            print("🛑 Bot durduruluyor...")
-        except Exception as e:
-            print(f"❌ Bot baslatma hatasi: {e}")
-            import traceback
-            traceback.print_exc()
-
-if __name__ == "__main__":
-    bot = SuperCardBot()
-    bot.run()
+# ============= BOTU BAŞLAT =============
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    print(f"🚀 {API_NAME} başlatılıyor...")
+    print(f"📡 API URL: {API_URL}")
+    print(f"🔄 Proxy sayısı: {len(api_client.proxy_manager.proxies)}")
+    print(f"🔧 Port: {port}")
+    print("✅ API çalışıyor!")
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
