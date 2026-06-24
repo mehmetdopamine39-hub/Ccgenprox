@@ -1,14 +1,12 @@
 services:
-  - type: worker
-    name: cc-super-bot
+  - type: web
+    name: cc-super-api
     env: python
     buildCommand: |
       pip install --upgrade pip
       pip install -r requirements.txt
     startCommand: python bot.py
     envVars:
-      - key: BOT_TOKEN
-        value: 8827662254:AAEAnhpLxgzgZ1gJWRYFmBtkt_OwYCrkpUc
       - key: PYTHON_VERSION
         value: 3.10.12
     region: frankfurt
