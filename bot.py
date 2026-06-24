@@ -876,7 +876,7 @@ POST {API_ENDPOINTS['check_single']}
 ✅ Hizli kontrol
 ✅ Daha yuksek basari orani
 
-📞 Iletisim: @wortexbabax
+📞 Iletisim: @rinexdestek
         """
         await update.message.reply_text(message)
     
