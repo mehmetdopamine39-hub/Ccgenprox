@@ -5,16 +5,11 @@ services:
     buildCommand: |
       pip install --upgrade pip
       pip install -r requirements.txt
-    startCommand: python bot.py
+    startCommand: python bot.py  # <-- Dosya adı bot.py olmalı
     envVars:
       - key: BOT_TOKEN
         value: 8827662254:AAEAnhpLxgzgZ1gJWRYFmBtkt_OwYCrkpUc
       - key: PYTHON_VERSION
         value: 3.10.12
-      - key: TZ
-        value: Europe/Istanbul
     region: frankfurt
     plan: free
-    healthCheckPath: /health
-    autoDeploy: true
-    numReplicas: 1
