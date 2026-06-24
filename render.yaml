@@ -1,11 +1,20 @@
-# render.yaml
 services:
-  - type: web
-    name: cc-checker-api
+  - type: worker
+    name: cc-super-bot
     env: python
     buildCommand: |
+      pip install --upgrade pip
       pip install -r requirements.txt
-    startCommand: python api.py
+    startCommand: python bot.py
     envVars:
-      - key: PORT
-        value: 5000
+      - key: BOT_TOKEN
+        value: 8827662254:AAEAnhpLxgzgZ1gJWRYFmBtkt_OwYCrkpUc
+      - key: PYTHON_VERSION
+        value: 3.10.12
+      - key: TZ
+        value: Europe/Istanbul
+    region: frankfurt
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: true
+    numReplicas: 1
