@@ -11,7 +11,5 @@ services:
         value: 8827662254:AAEAnhpLxgzgZ1gJWRYFmBtkt_OwYCrkpUc
       - key: PYTHON_VERSION
         value: 3.10.12
-      - key: CHANNEL_USERNAME
-        value: @yartyccfurry
     region: frankfurt
     plan: free
