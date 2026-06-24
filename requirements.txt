@@ -9,5 +9,4 @@ certifi==2024.2.2
 charset-normalizer==3.3.2
 idna==3.6
 cloudscraper==1.2.71
-curl_cffi==0.5.10
 colorama==0.4.6
